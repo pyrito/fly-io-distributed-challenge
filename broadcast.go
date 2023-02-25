@@ -3,24 +3,46 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"sync"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
-func contains(s []any, e any) bool {
-	for _, a := range s {
-		if a == e {
-			return true
-		}
+type Metadata struct {
+	messages map[int]struct{}
+	*sync.RWMutex
+}
+
+func NewMetadata() *Metadata {
+	return &Metadata{
+		messages: make(map[int]struct{}),
+		RWMutex:  &sync.RWMutex{},
+	}
+}
+
+func (m *Metadata) AddMessage(msg int) bool {
+	m.Lock()
+	defer m.Unlock()
+	if _, exists := m.messages[msg]; !exists {
+		m.messages[msg] = struct{}{}
+		return true
 	}
 	return false
 }
 
+func (m *Metadata) GetMessages() []int {
+	m.RLock()
+	defer m.RUnlock()
+	msgs := make([]int, 0, len(m.messages))
+	for k := range m.messages {
+		msgs = append(msgs, k)
+	}
+	return msgs
+}
+
 func main() {
 	n := maelstrom.NewNode()
-
-	var messages []any
-	var topology map[string]any
+	nodeMetadata := NewMetadata()
 
 	n.Handle("broadcast", func(msg maelstrom.Message) error {
 		// Unmarshal the message body as a loosely-typed map
@@ -28,63 +50,47 @@ func main() {
 		if err := json.Unmarshal(msg.Body, &body); err != nil {
 			return err
 		}
+		message := int(body["message"].(float64))
 
-		// Append the messages to a local list
-		// Check that the message doesn't exist in what we've seen
-		// already!
-		message := body["message"]
-		if !contains(messages, message) {
-			messages = append(messages, body["message"])
+		// Returns false if we already have seen this message
+		if !nodeMetadata.AddMessage(message) {
+			return nil
 		}
 
-		// Update the message type to return back.
-		response := make(map[string]any)
-		response["type"] = "broadcast_ok"
-
-		// We are going to send the message to everyone we can talk to
-		dest_nodes := topology[n.ID()]
-		for _, node := range dest_nodes.([]interface{}) {
-			if err := n.Send(node.(string), body); err != nil {
-				log.Fatal(err)
+		// Broadcast the message to everyone else
+		for _, node := range n.NodeIDs() {
+			if n.ID() == node || msg.Src == node {
+				continue
 			}
+			// Nasty golang bug, requires you to copy iterator var
+			node_copy := node
+			go func() {
+				if err := n.Send(node_copy, body); err != nil {
+					panic(err)
+				}
+			}()
 		}
+
 		// Reply with the new message
-		return n.Reply(msg, response)
+		return n.Reply(msg, map[string]any{
+			"type": "broadcast_ok",
+		})
 	})
 
 	n.Handle("read", func(msg maelstrom.Message) error {
-		// Unmarshal the message body as a loosely-typed map
-		var body map[string]any
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
-
-		// Update the message type to return back.
-		body["type"] = "read_ok"
-		body["messages"] = messages
-
-		// Echo the original message back with the updated message type.
-		return n.Reply(msg, body)
+		// Just return the messages list
+		msgs := nodeMetadata.GetMessages()
+		return n.Reply(msg, map[string]any{
+			"type":     "read_ok",
+			"messages": msgs,
+		})
 	})
 
 	n.Handle("topology", func(msg maelstrom.Message) error {
-		// Unmarshal the message body as a loosely-typed map
-		var body map[string]any
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
-
-		topology = make(map[string]any)
-		for k, v := range body["topology"].(map[string]any) {
-			topology[k] = v
-		}
-
-		// Update the message type to return back.
-		response := make(map[string]any)
-		response["type"] = "topology_ok"
-
-		// Echo the original message back with the updated message type.
-		return n.Reply(msg, response)
+		// We're just not going to do anything special for now
+		return n.Reply(msg, map[string]any{
+			"type": "topology_ok",
+		})
 	})
 
 	if err := n.Run(); err != nil {
