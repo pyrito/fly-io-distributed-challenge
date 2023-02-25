@@ -1,32 +1,32 @@
 package main
 
 import (
-    "encoding/json"
-    "log"
+	"encoding/json"
+	"log"
 
-    maelstrom "github.com/jepsen-io/maelstrom/demo/go"
-    uuid "github.com/google/uuid"
+	uuid "github.com/google/uuid"
+	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 func main() {
-    n := maelstrom.NewNode()
+	n := maelstrom.NewNode()
 
-    n.Handle("generate", func(msg maelstrom.Message) error {
-        // Unmarshal the message body as a loosely-typed map
-        var body map[string]any
-        if err := json.Unmarshal(msg.Body, &body); err != nil {
-            return err
-        }
+	n.Handle("generate", func(msg maelstrom.Message) error {
+		// Unmarshal the message body as a loosely-typed map
+		var body map[string]any
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
+			return err
+		}
 
-        // Update the message type to return back.
-        body["type"] = "generate_ok"
-        body["id"] = uuid.New().String()
+		// Update the message type to return back.
+		body["type"] = "generate_ok"
+		body["id"] = uuid.New().String()
 
-        // Echo the original message back with the updated message type.
-        return n.Reply(msg, body)
-    })
+		// Echo the original message back with the updated message type.
+		return n.Reply(msg, body)
+	})
 
-    if err := n.Run(); err != nil {
-        log.Fatal(err)
-    }
+	if err := n.Run(); err != nil {
+		log.Fatal(err)
+	}
 }
