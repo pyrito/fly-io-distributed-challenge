@@ -11,26 +11,16 @@ import (
 )
 
 type Service struct {
-	node         *maelstrom.Node
-	messages     map[int]struct{}
-	recvAckChans map[string](chan any)
+	node     *maelstrom.Node
+	messages map[int]struct{}
 	*sync.RWMutex
 }
 
 func NewService(node *maelstrom.Node) *Service {
 	service := &Service{
-		node:         node,
-		messages:     make(map[int]struct{}),
-		recvAckChans: make(map[string](chan any)),
-		RWMutex:      &sync.RWMutex{},
-	}
-
-	// Initialize the service channels
-	for _, n := range node.NodeIDs() {
-		if n == node.ID() {
-			continue
-		}
-		service.recvAckChans[n] = make(chan any, 100)
+		node:     node,
+		messages: make(map[int]struct{}),
+		RWMutex:  &sync.RWMutex{},
 	}
 
 	return service
