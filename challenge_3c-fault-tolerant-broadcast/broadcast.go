@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"sync"
@@ -55,63 +56,25 @@ func (s *Service) getMessages() []int {
 	return msgs
 }
 
-func (s *Service) sendBroadcastMessages(dst_id string, message int) error {
-	ch := s.recvAckChans[dst_id]
-	body := map[string]any{
-		"message": message,
-		"type":    "sendAck",
-	}
-	for {
-		if err := s.node.Send(dst_id, body); err != nil {
-			panic(err)
-		}
-		select {
-		case <-ch:
-			// Seems like communication with this node is fine, so let's
-			// just break here.
-			log.Printf("RECEIVED ack")
-			break
-		case <-time.After(1 * time.Second):
-			// If we haven't gotten anything in a second, then we retry
-			log.Printf("retrying message to %s", dst_id)
-			log.Println(body)
+func (s *Service) sendRPC(dst string, body map[string]any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := s.node.SyncRPC(ctx, dst, body)
+	return err
+}
+
+func (s *Service) sendBroadcastMessages(dst_id string, msg_body map[string]any) error {
+	// Let's try sending the message 1000 times and wait for a timeout!
+	err := error(nil)
+	for i := 0; i < 1000; i++ {
+		if err := s.sendRPC(dst_id, msg_body); err != nil {
+			time.Sleep(time.Duration(3) * time.Second)
 			continue
 		}
-	}
-	return nil
-}
-
-func (s *Service) SendAckHandler(msg maelstrom.Message) error {
-	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
-		return err
-	}
-	message := int(body["message"].(float64))
-
-	// Add the message that we got from the broadcast, let's now
-	// send back an ack
-	if !s.addMessage(message) {
+		// Message succeeds
 		return nil
 	}
-
-	return s.node.Reply(msg, map[string]any{
-		"type": "ack",
-	})
-}
-
-func (s *Service) RecvAckHandler(msg maelstrom.Message) error {
-	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
-		return err
-	}
-	// message := int(body["message"].(float64))
-
-	log.Println("we are receiving the ack")
-	log.Println(body)
-	ch := s.recvAckChans[msg.Src]
-	ch <- 123
-
-	return nil
+	return err
 }
 
 func (s *Service) BroadcastHandler(msg maelstrom.Message) error {
@@ -134,17 +97,7 @@ func (s *Service) BroadcastHandler(msg maelstrom.Message) error {
 		}
 		// Nasty golang bug, requires you to copy iterator var
 		node_copy := node
-		// Maintain a map of channels for each node ID
-		// n1 -> [...], n2 -> [...], n3 -> [...]
-		// When we broadcast a value to a specific node (n.Send), we will set
-		// the message type to "sendAck", which should end up calling a handler
-		// called: "sendAck". This will package up an "ack" message from the dest
-		// node and the original node will handle this by adding it to a channel.
-
-		// The original node will be listening to the respective channel, if nothing
-		// is sent on the channel, we can assume that we need to retry the message
-		// send. We assume packets don't drop
-		go s.sendBroadcastMessages(node_copy, message)
+		go s.sendBroadcastMessages(node_copy, body)
 	}
 
 	// Reply with the new message
@@ -163,7 +116,6 @@ func (s *Service) ReadHandler(msg maelstrom.Message) error {
 }
 
 func (s *Service) TopologyHandler(msg maelstrom.Message) error {
-	// We're just not going to do anything special for now
 	return s.node.Reply(msg, map[string]any{
 		"type": "topology_ok",
 	})
@@ -176,8 +128,6 @@ func main() {
 	n.Handle("broadcast", nodeService.BroadcastHandler)
 	n.Handle("read", nodeService.ReadHandler)
 	n.Handle("topology", nodeService.TopologyHandler)
-	n.Handle("sendAck", nodeService.SendAckHandler)
-	n.Handle("ack", nodeService.RecvAckHandler)
 
 	if err := n.Run(); err != nil {
 		log.Fatal(err)
