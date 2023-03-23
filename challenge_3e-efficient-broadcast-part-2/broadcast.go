@@ -149,8 +149,6 @@ func (s *Service) sendBatchMessages() error {
 	s.bufferLock.Lock()
 	defer s.bufferLock.Unlock()
 
-	var wg sync.WaitGroup
-
 	// The general idea is that we create parallel message
 	// sends to everyone that we are supposed to send to.
 	for _, node := range s.receiverIDs {
@@ -167,12 +165,9 @@ func (s *Service) sendBatchMessages() error {
 			"messages_batch": messages_batch,
 		}
 		go func() {
-			defer wg.Done()
 			s.sendBroadcastMessages(dst_node, msg_send)
 		}()
-		wg.Add(1)
 	}
-	wg.Wait()
 
 	// We need to clear out the buffer
 	s.msgBuffer = []int{}
